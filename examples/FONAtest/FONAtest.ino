@@ -1,3 +1,7 @@
+#include <Base64.h>
+
+#include <SD.h>
+
 /***************************************************
   This is an example for our Adafruit FONA Cellular Module
 
@@ -25,11 +29,21 @@ Open up the serial console on the Arduino at 115200 baud to interact with FONA
 Note that if you need to set a GPRS APN, username, and password scroll down to
 the commented section below at the end of the setup() function.
 */
+#include <Arduino.h>
+#include "wiring_private.h"
 #include "Adafruit_FONA.h"
 
-#define FONA_RX 2
-#define FONA_TX 3
-#define FONA_RST 4
+#define FONA_RX 12
+#define FONA_TX 10
+#define FONA_RST 5
+
+Uart Serial2 (&sercom1, 34ul, 36ul, SERCOM_RX_PAD_3, UART_TX_PAD_2);
+void SERCOM1_Handler()
+{
+  Serial2.IrqHandler();
+}
+
+const int chipSelect = 4;
 
 // this is a large buffer for replies
 char replybuffer[255];
@@ -37,12 +51,12 @@ char replybuffer[255];
 // We default to using software serial. If you want to use hardware serial
 // (because softserial isnt supported) comment out the following three lines 
 // and uncomment the HardwareSerial line
-#include <SoftwareSerial.h>
-SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
-SoftwareSerial *fonaSerial = &fonaSS;
+//#include <SoftwareSerial.h>
+//SoftwareSerial fonaSS = SoftwareSerial(FONA_TX, FONA_RX);
+//SoftwareSerial *fonaSerial = &fonaSS;
 
 // Hardware serial is also possible!
-//  HardwareSerial *fonaSerial = &Serial1;
+  HardwareSerial *fonaSerial = &Serial2;
 
 // Use this for FONA 800 and 808s
 Adafruit_FONA fona = Adafruit_FONA(FONA_RST);
@@ -54,13 +68,16 @@ uint8_t readline(char *buff, uint8_t maxbuff, uint16_t timeout = 0);
 uint8_t type;
 
 void setup() {
+  pinPeripheral(12, PIO_SERCOM);
+  pinPeripheral(10, PIO_SERCOM);
   while (!Serial);
+  while (!Serial2);
 
   Serial.begin(115200);
   Serial.println(F("FONA basic test"));
   Serial.println(F("Initializing....(May take 3 seconds)"));
 
-  fonaSerial->begin(4800);
+  fonaSerial->begin(38400);
   if (! fona.begin(*fonaSerial)) {
     Serial.println(F("Couldn't find FONA"));
     while (1);
@@ -97,12 +114,22 @@ void setup() {
   // network.  Contact your provider for the exact APN, username,
   // and password values.  Username and password are optional and
   // can be removed, but APN is required.
-  //fona.setGPRSNetworkSettings(F("your APN"), F("your username"), F("your password"));
+  fona.setGPRSNetworkSettings(F("wholesale"), F(""), F(""));
+
+  //fona.setMMSNetworkSettings(F("wholesale.mmsmvno.com/mms/wapenc"),NULL,NULL);
+
+  fona.setEmailSettings(F("mailtrap.io"), F("2525"), F("f010e174516ec4"), F("c37b35c7867b88"));
+  //fona.setEmailSettings(F("aspmx.l.google.com"), F("25"), NULL, NULL);
 
   // Optionally configure HTTP gets to follow redirects over SSL.
   // Default is not to follow SSL redirects, however if you uncomment
   // the following line then redirects over SSL will be followed.
   //fona.setHTTPSRedirect(true);
+
+  if (!SD.begin(chipSelect)) {
+    Serial.println(F("SD Card fail"));
+  }
+  else Serial.println(F("SD Success!"));
 
   printMenu();
 }
@@ -143,6 +170,12 @@ void printMenu(void) {
   Serial.println(F("[d] Delete SMS #"));
   Serial.println(F("[s] Send SMS"));
   Serial.println(F("[u] Send USSD"));
+
+  // MMS
+  Serial.println(F("[K] Send MMS"));
+
+  // Email
+  Serial.println(F("[Z] Send Email"));
   
   // Time
   Serial.println(F("[y] Enable network time sync (FONA 800 & 808)"));
@@ -585,6 +618,72 @@ void loop() {
         break;
       }
 
+    
+    case 'Z': {
+        // send an email!
+        char emailfrom[51], emailto[51], emailsubject[101], emailmessage[141], attachment[41], fileBuffer[1020], emailBuffer[1360]; 
+        unsigned long mmsFileSize = 0;
+        unsigned int bytesToRead = 0;
+        int encodedLen = 0;
+        
+        flushSerial();
+         Serial.print(F("From:"));
+        readline(emailfrom, 50);
+        Serial.println(emailfrom);
+        Serial.print(F("Send to:"));
+        readline(emailto, 50);
+        Serial.println(emailto);
+        Serial.print(F("Subject:"));
+        readline(emailsubject, 100);
+        Serial.println(emailsubject);
+        Serial.print(F("Type out one-line message (140 char): "));
+        readline(emailmessage, 140);
+        Serial.println(emailmessage);
+        Serial.print(F("Attachment: "));
+        readline(attachment, 40);
+
+        File myImage = SD.open(attachment, FILE_READ);
+        if (myImage) {
+          mmsFileSize = myImage.size();
+          Serial.print(F("Attachment is "));
+          Serial.print(mmsFileSize);
+          Serial.println(F(" bytes"));
+        } else {
+          Serial.println(F("Failed to open image"));
+          break;
+        }
+        
+        if (!fona.sendEmailWithAttachment(emailmessage, attachment, emailto, emailfrom, emailsubject)) {
+          Serial.println(F("Failed to start email"));
+          break;
+        } else {
+          Serial.println(F("Started email"));
+        }
+
+        while (mmsFileSize > 0) {
+          if (mmsFileSize < 1020) {
+            bytesToRead = mmsFileSize;
+          } else {
+            bytesToRead = 1020;
+          }
+          myImage.read(fileBuffer, bytesToRead);
+          encodedLen = base64_enc_len(bytesToRead);
+          base64_encode(emailBuffer, fileBuffer, bytesToRead);
+          fona.sendAttachment(emailBuffer, encodedLen);
+          mmsFileSize -= bytesToRead;
+        }
+        fona.sendAttachment(emailBuffer, 0);
+
+        if (!fona.checkEmailResult()) {
+          Serial.println(F("Failed to send email"));
+          break;
+        } else {
+          Serial.println(F("Sent email!"));
+        }
+
+        break;
+      }
+
     case 'u': {
       // send a USSD!
       char message[141];
@@ -604,6 +703,63 @@ void loop() {
         Serial.println(F("*****"));
       }
     }
+
+    /*** MMS ***/
+    case 'K': {
+        // send an MMS!
+        char sendto[21], mmsFilename[20], mmsBuffer[1024];
+        unsigned long mmsFileSize = 0;
+        unsigned int bytesToRead = 0;
+        
+        flushSerial();
+        Serial.print(F("Send to #"));
+        readline(sendto, 20);
+        Serial.println(sendto);
+        Serial.print(F("JPG Filename: "));
+        readline(mmsFilename, 20);
+        Serial.println(mmsFilename);
+        File myImage = SD.open(mmsFilename, FILE_READ);
+        if (myImage) {
+          mmsFileSize = myImage.size();
+          Serial.print(F("Read "));
+          Serial.print(mmsFileSize);
+          Serial.println(F(" bytes"));
+        } else {
+          Serial.println(F("Failed to open image"));
+          break;
+        }
+        if (!fona.enableMMS(true)) {
+          Serial.println(F("Failed to enable MMS"));
+          break;
+        } else {
+          Serial.println(F("Enabled MMS"));
+        }
+        if (!fona.startMMS(sendto, mmsFileSize)) {
+          Serial.println(F("Failed to start MMS"));
+          fona.enableMMS(false);
+          break;
+        } else {
+          Serial.println(F("Started MMS"));
+        }
+        while (mmsFileSize > 0) {
+          if (mmsFileSize < 1024) {
+            bytesToRead = mmsFileSize;
+          } else {
+            bytesToRead = 1024;
+          }
+          myImage.read(mmsBuffer, bytesToRead);
+          fona.writeMMSData(mmsBuffer, bytesToRead);
+          mmsFileSize -= bytesToRead;
+        }
+        myImage.close();
+        if (!fona.sendMMS()) {
+          Serial.println(F("Failed to send MMS"));
+        } else {
+          Serial.println(F("Sent MMS"));
+        }
+        fona.enableMMS(false);
+        break;
+      }
 
     /*** Time ***/
 

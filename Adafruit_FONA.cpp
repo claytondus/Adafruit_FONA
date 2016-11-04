@@ -32,6 +32,7 @@ Adafruit_FONA::Adafruit_FONA(int8_t rst)
   httpsredirect = false;
   useragent = F("FONA");
   ok_reply = F("OK");
+  connect_reply = F("CONNECT");
 }
 
 uint8_t Adafruit_FONA::type(void) {
@@ -611,6 +612,290 @@ boolean Adafruit_FONA::deleteSMS(uint8_t i) {
 
   return sendCheckReply(sendbuff, ok_reply, 2000);
 }
+
+/********* MMS **********************************************************/
+
+void Adafruit_FONA::setMMSNetworkSettings(FONAFlashStringPtr mmsurl,
+              FONAFlashStringPtr mmsproxy, FONAFlashStringPtr mmsport) {
+  this->mmsurl = mmsurl;
+  this->mmsproxy = mmsproxy;
+  this->mmsport = mmsport;
+}
+
+boolean Adafruit_FONA::enableMMS(boolean onoff) {
+  
+  if (onoff) {
+
+    //Enable MMS mode
+    sendCheckReply(F("AT+CMMSINIT"), ok_reply, 10000);
+      
+    
+    //Set MMS center URL without http://
+    if (! sendCheckReplyQuoted(F("AT+CMMSCURL="), mmsurl, ok_reply, 10000))
+      return false;
+
+    //Set MMS proxy and port
+    if( mmsproxy  && mmsport ) {
+	    flushInput();
+
+	    mySerial->print(F("AT+CMMSPROTO=\""));
+	    mySerial->print(mmsproxy);
+	    mySerial->print(F("\","));
+	    mySerial->println(mmsport);
+
+	    DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+CMMSPROTO=\""));
+	    DEBUG_PRINT(mmsproxy);
+	    DEBUG_PRINT("\",");
+	    DEBUG_PRINTLN(mmsport); 
+
+	    if (! expectReply(ok_reply)) return false;
+    }
+    
+/*
+    // set bearer profile! connection type GPRS
+    if (! sendCheckReply(F("AT+SAPBR=3,1,\"CONTYPE\",\"GPRS\""),
+			   ok_reply, 10000))
+      return false;
+
+    // set bearer profile access point name
+    if (apn) {
+      // Send command AT+SAPBR=3,1,"APN","<apn value>" where <apn value> is the configured APN value.
+      if (! sendCheckReplyQuoted(F("AT+SAPBR=3,1,\"APN\","), apn, ok_reply, 10000))
+        return false;  
+    }
+
+    // open GPRS context
+    if (! sendCheckReply(F("AT+SAPBR=1,1"), ok_reply, 30000))
+      return false;
+*/
+    //Set bearer context id
+    if (! sendCheckReply(F("AT+CMMSCID=1"), ok_reply, 10000))
+      return false;
+
+
+
+  } else {
+
+    //Exit MMS function
+    if (! sendCheckReply(F("AT+CMMSTERM"), ok_reply, 10000))
+      return false;
+
+  }
+  return true;
+
+}
+
+boolean Adafruit_FONA::startMMS(char *mmsaddr, unsigned long mmslen) {
+
+  //Enter MMS Edit mode
+  if (! sendCheckReply(F("AT+CMMSEDIT=1"), ok_reply)) return false;
+
+  //Prepare and send MMS recipient number
+  char sendcmd[34] = "AT+CMMSRECP=\"";
+  strncpy(sendcmd+13, mmsaddr, 34-13-2);  // 13 bytes beginning, 2 bytes for close quote + null
+  sendcmd[strlen(sendcmd)] = '\"';
+
+  if (! sendCheckReply(sendcmd, ok_reply, 10000)) return false;
+
+  //Start JPEG download
+  mySerial->print(F("AT+CMMSDOWN=\"PIC\","));
+  mySerial->print(mmslen);
+  mySerial->println(",20000");
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+CMMSDOWN=\"PIC\","));
+  DEBUG_PRINT(mmslen);
+  DEBUG_PRINTLN(",20000");
+
+  if (! expectReply(connect_reply)) return false;
+
+  DEBUG_PRINT(F("Connect received, send data now..."));
+
+  return true;
+}
+
+void Adafruit_FONA::writeMMSData(char *data, unsigned int len) {
+
+  mySerial->write(data, len);
+
+  DEBUG_PRINTLN(F("."));
+
+}
+
+boolean Adafruit_FONA::sendMMS() {
+
+  if (! expectReply(ok_reply, 20000)) return false;
+
+  DEBUG_PRINTLN(ok_reply);
+
+  //Send MMS
+  if (! sendCheckReply(F("AT+CMMSSEND"), ok_reply)) return false;
+
+  //Exit Edit mode and destroy MMS
+  if (! sendCheckReply(F("AT+CMMSEDIT=0"), ok_reply)) return false;
+  
+  return true;
+
+}
+
+/********* Email *********************************************************/
+void Adafruit_FONA::setEmailSettings(FONAFlashStringPtr emailServer,
+								FONAFlashStringPtr emailServerPort,
+              FONAFlashStringPtr emailUser, FONAFlashStringPtr emailPassword)
+						  	{
+  this->emailServer = emailServer;
+  this->emailServerPort = emailServerPort;
+  this->emailUser = emailUser;
+	this->emailPassword = emailPassword;
+}
+
+
+boolean Adafruit_FONA::sendEmailWithAttachment(char *msg, char *filename, char *to, char *from, char *subject) {
+	
+	//Enable Email mode
+  sendCheckReply(F("AT+EMAILCID=1"), ok_reply, 10000);
+	sendCheckReply(F("AT+EMAILTO=30"), ok_reply, 10000);
+
+	//Set server
+  mySerial->print(F("AT+SMTPSRV=\""));
+  mySerial->print(this->emailServer);
+  mySerial->print("\",");
+  mySerial->println(this->emailServerPort);
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPSRV=\""));
+  DEBUG_PRINT(this->emailServer);
+  DEBUG_PRINT("\",");
+  DEBUG_PRINTLN(this->emailServerPort);
+
+  if (! expectReply(ok_reply)) return false;
+
+	//Set authentication
+  if(this->emailUser && this->emailPassword) {	
+					mySerial->print(F("AT+SMTPAUTH=1,\""));
+					mySerial->print(this->emailUser);
+					mySerial->print("\",\"");
+					mySerial->print(this->emailPassword);
+					mySerial->println("\"");
+
+					DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPAUTH=1,\""));
+					DEBUG_PRINT(this->emailUser);
+					DEBUG_PRINT("\",\"");
+					DEBUG_PRINT(this->emailPassword);
+					DEBUG_PRINTLN("\"");
+					
+
+					if (! expectReply(ok_reply)) return false;
+	}
+
+	//Set from
+	mySerial->print(F("AT+SMTPFROM=\""));
+  mySerial->print(from);
+  mySerial->println("\",\"\"");
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPFROM=\""));
+  DEBUG_PRINT(from);
+  DEBUG_PRINTLN("\",\"\"");
+
+  if (! expectReply(ok_reply)) return false;
+
+	//Set receiver
+  mySerial->print(F("AT+SMTPRCPT=0,0,\""));
+  mySerial->print(to);
+  mySerial->println("\",\"\"");
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPRCPT=0,0,\""));
+  DEBUG_PRINT(to);
+  DEBUG_PRINTLN("\",\"\"");
+
+  if (! expectReply(ok_reply)) return false;
+
+	//Set Subject
+  mySerial->print(F("AT+SMTPSUB=\""));
+  mySerial->print(subject);
+  mySerial->println("\"");
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPSUB=\""));
+  DEBUG_PRINT(subject);
+  DEBUG_PRINTLN("\"");
+
+  if (! expectReply(ok_reply)) return false;
+
+	//Set body
+	mySerial->print(F("AT+SMTPBODY="));
+  mySerial->println(strlen(msg));
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPBODY="));
+  DEBUG_PRINTLN(strlen(msg));
+
+  if (! expectReply(F("DOWNLOAD"))) return false;
+
+  mySerial->print(msg);
+
+  DEBUG_PRINT(msg);
+
+  if (! expectReply(ok_reply)) return false;
+
+  //Set attachment
+  mySerial->print(F("AT+SMTPFILE=2,\""));
+  mySerial->print(filename);
+  mySerial->println("\",1");
+
+  DEBUG_PRINT(F("\t---> ")); DEBUG_PRINT(F("AT+SMTPFILE=1,\""));
+  DEBUG_PRINT(filename);
+  DEBUG_PRINTLN("\",0");
+
+  if (! expectReply(ok_reply)) return false;
+
+  //Send
+  sendCheckReply(F("AT+SMTPSEND"), ok_reply, 10000);
+
+}
+
+
+boolean Adafruit_FONA::sendAttachment(char *data, unsigned int len) {
+
+	char buff[7]; unsigned int sendlen;
+
+	readline(10000);
+  if (strncmp(replybuffer, "+SMTPFT: ", 9) != 0)
+    return false;
+
+  char *p = replybuffer+11;
+  strncpy(buff, p, 4);
+  buff[4] = 0;
+	sendlen = atoi(buff);
+
+	DEBUG_PRINT(F("Received "));
+	DEBUG_PRINTLN(buff);
+	DEBUG_PRINT(sendlen);
+	DEBUG_PRINTLN(F(" bytes can be sent"));
+
+  mySerial->print(F("AT+SMTPFT="));
+	mySerial->println(len);
+
+	DEBUG_PRINT(F("AT+SMTPFT="));
+	DEBUG_PRINTLN(len);
+
+	readline(10000);
+  if (strncmp(replybuffer, "+SMTPFT: ", 9) != 0)
+    return false;
+
+	if(len > 0) {
+  	mySerial->write(data, len);
+	}
+
+	if (! expectReply(ok_reply)) return false;
+
+  DEBUG_PRINTLN(F("."));
+
+}
+
+boolean Adafruit_FONA::checkEmailResult() {
+
+  if (! expectReply(F("+SMTPSEND: 1"), 20000)) return false;
+
+}
+
+
 
 /********* USSD *********************************************************/
 

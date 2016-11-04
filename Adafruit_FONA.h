@@ -123,6 +123,19 @@ class Adafruit_FONA : public FONAStreamType {
   boolean getSMSSender(uint8_t i, char *sender, int senderlen);
   boolean sendUSSD(char *ussdmsg, char *ussdbuff, uint16_t maxlen, uint16_t *readlen);
 
+  // MMS
+  void setMMSNetworkSettings(FONAFlashStringPtr mmsurl, FONAFlashStringPtr mmsproxy, FONAFlashStringPtr mmsport);
+  boolean enableMMS(boolean onoff);
+  boolean startMMS(char *mmsaddr, unsigned long mmslen);
+  void writeMMSData(char *data, unsigned int len);
+  boolean sendMMS();
+
+  //Email
+  void setEmailSettings(FONAFlashStringPtr emailServer, FONAFlashStringPtr emailServerPort, FONAFlashStringPtr emailUser, FONAFlashStringPtr emailPassword);
+  boolean sendEmailWithAttachment(char *msg, char *filename, char *to, char *from, char *subject);
+  boolean sendAttachment(char *data, unsigned int len);
+  boolean checkEmailResult();
+
   // Time
   boolean enableNetworkTimeSync(boolean onoff);
   boolean enableNTPTimeSync(boolean onoff, FONAFlashStringPtr ntpserver=0);
@@ -199,9 +212,17 @@ class Adafruit_FONA : public FONAStreamType {
   FONAFlashStringPtr apn;
   FONAFlashStringPtr apnusername;
   FONAFlashStringPtr apnpassword;
+  FONAFlashStringPtr mmsurl;
+  FONAFlashStringPtr mmsproxy;
+  FONAFlashStringPtr mmsport;
+  FONAFlashStringPtr emailServer;
+  FONAFlashStringPtr emailServerPort;
+  FONAFlashStringPtr emailUser;
+  FONAFlashStringPtr emailPassword;
   boolean httpsredirect;
   FONAFlashStringPtr useragent;
   FONAFlashStringPtr ok_reply;
+  FONAFlashStringPtr connect_reply;
 
   // HTTP helpers
   boolean HTTP_setup(char *url);
